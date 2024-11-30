@@ -1,194 +1,142 @@
-# libsu
+The code you've provided revolves around using the libsu library in Android, which allows applications to interact with root permissions (essentially gaining administrative rights) on Android devices. While libsu can be useful for specific purposes, it's important to ensure that your implementation adheres to security best practices to avoid potential vulnerabilities. I'll point out several issues with the original approach and suggest improvements for security, best practices, and avoiding misuse of root permissions.
 
-[![](https://jitpack.io/v/topjohnwu/libsu.svg)](https://jitpack.io/#topjohnwu/libsu)
+1. Security Concerns with Root Permissions:
 
-An Android library providing a complete solution for apps using root permissions.
+Root access is risky: Granting root access is inherently dangerous as it gives your app the ability to execute commands that could harm the device or compromise the user’s data. Apps requesting root access should be very cautious and transparent about why they need it.
 
-`libsu` comes with 2 main components: the `core` module handles the creation of the Unix (root) shell process and wraps it with high level, robust Java APIs; the `service` module handles the launching, binding, and management of root services over IPC, allowing you to run Java/Kotlin and C/C++ code (via JNI) with root permissions.
+Ensure no unnecessary root commands: Limit root access only to commands that are absolutely necessary for the app. If you're using root to perform a specific task, ensure that it is properly sandboxed and only executes the commands needed for that task.
 
-## [Changelog](./CHANGELOG.md)
+Authentication and Authorization: Always authenticate requests to use root access. This can involve additional layers like Two-Factor Authentication (2FA) or cryptographic verification to ensure that unauthorized users don't have access.
 
-## [Javadoc](https://topjohnwu.github.io/libsu/)
 
-## Download
+2. Root Access and Permissions:
 
-```groovy
-android {
-    compileOptions {
-        // The library uses Java 8 features
-        sourceCompatibility JavaVersion.VERSION_1_8
-        targetCompatibility JavaVersion.VERSION_1_8
-    }
-}
-repositories {
-    maven { url 'https://jitpack.io' }
-}
-dependencies {
-    def libsuVersion = '5.1.0'
+Avoid granting root unless absolutely necessary: Avoid running your app with root permissions unless absolutely necessary. In cases where root access is required, the app should request it in a secure and transparent manner, ideally using a prompt that clearly informs users of the risks involved.
 
-    // The core module that provides APIs to a shell
-    implementation "com.github.topjohnwu.libsu:core:${libsuVersion}"
+Use 2FA: To ensure only authorized users can invoke root privileges, you could implement an additional layer of security such as Two-Factor Authentication (2FA) before executing critical commands.
 
-    // Optional: APIs for creating root services. Depends on ":core"
-    implementation "com.github.topjohnwu.libsu:service:${libsuVersion}"
 
-    // Optional: Provides remote file system support
-    implementation "com.github.topjohnwu.libsu:nio:${libsuVersion}"
-}
-```
+3. Error Handling and Validation:
 
-## Quick Tutorial
+Ensure that proper error handling is implemented to prevent command injection and other exploits. The code that interacts with root permissions should validate inputs, handle unexpected outputs, and ensure that the commands being executed are safe.
 
-Please note that this is a quick demo going through the key features of `libsu`. Please read the full Javadoc and check out the example app (`:example`) in this project for more details.
+Limit Input Sources: For example, when reading from raw resources (getResources().openRawResource(R.raw.script)), ensure that these scripts are thoroughly validated before execution to avoid the risk of running malicious scripts.
 
-### Configuration
 
-Similar to threads where there is a special "main thread", `libsu` also has the concept of the "main shell". For each process, there is a single globally shared "main shell" that is constructed on-demand and cached. Set default configurations before the main `Shell` instance is created:
+4. Updates and Security Patches:
 
-```java
-public class SplashActivity extends Activity {
+The libsu library itself should be updated regularly, and its dependencies (e.g., com.github.topjohnwu.libsu:core) should be kept up to date. Make sure to apply all security patches as soon as they are released to avoid vulnerabilities.
 
-    static {
-        // Set settings before the main shell can be created
-        Shell.enableVerboseLogging = BuildConfig.DEBUG;
-        Shell.setDefaultBuilder(Shell.Builder.create()
-            .setFlags(Shell.FLAG_REDIRECT_STDERR)
-            .setTimeout(10)
-        );
-    }
+Consider conducting regular security audits on the code that uses libsu to ensure it is not opening up the app or device to unnecessary risks.
 
-    @Override
-    protected void onCreate(Bundle savedInstanceState) {
-        super.onCreate(savedInstanceState);
-        // Preheat the main root shell in the splash screen
-        // so the app can use it afterwards without interrupting
-        // application flow (e.g. root permission prompt)
-        Shell.getShell(shell -> {
-            // The main shell is now constructed and cached
-            // Exit splash screen and enter main activity
-            Intent intent = new Intent(this, MainActivity.class);
-            startActivity(intent);
-            finish();
-        });
-    }
+
+5. Avoiding Granting Root Access:
+
+You should generally avoid granting root access to the app unless it's essential. Even if root access is required for certain functionality, consider restricting it to only those portions of the app that absolutely need it, and do so in a controlled, secure manner.
+
+
+---
+
+Suggested Secure Code Updates:
+
+1. Two-Factor Authentication (2FA) Example:
+
+You can implement 2FA before allowing root access by asking users to verify themselves through a second factor (e.g., an OTP or a biometric check). Here’s a high-level example of how you might enforce this in the app before executing sensitive root operations:
+
+public void requestRootAccessWith2FA(final Context context) {
+    // Prompt the user for 2FA
+    show2FAPrompt(context, new On2FAVerifiedListener() {
+        @Override
+        public void onVerified(boolean success) {
+            if (success) {
+                // Grant root access
+                requestRootAccess();
+            } else {
+                // Deny root access if 2FA fails
+                showError("2FA verification failed");
+            }
+        }
+    });
 }
 
-```
-
-### Shell Operations
-
-`Shell` operations can be performed through static `Shell.cmd(...)` methods that directly use the main root shell:
-
-```java
-Shell.Result result;
-// Execute commands synchronously
-result = Shell.cmd("find /dev/block -iname boot").exec();
-// Aside from commands, you can also load scripts from InputStream.
-// This is NOT like executing a script like "sh script.sh", but rather
-// more similar to sourcing the script (". script.sh").
-result = Shell.cmd(getResources().openRawResource(R.raw.script)).exec();
-
-List<String> out = result.getOut();  // stdout
-int code = result.getCode();         // return code of the last command
-boolean ok = result.isSuccess();     // return code == 0?
-
-// Async APIs
-Shell.cmd("setenforce 0").submit();   // submit and don't care results
-Shell.cmd("sleep 5", "echo hello").submit(result -> updateUI(result));
-
-// Run tasks and output to specific Lists
-List<String> mmaps = new ArrayList<>();
-Shell.cmd("cat /proc/1/maps").to(mmaps).exec();
-List<String> stdout = new ArrayList<>();
-List<String> stderr = new ArrayList<>();
-Shell.cmd("echo hello", "echo hello >&2").to(stdout, stderr).exec();
-
-// Receive output in real-time
-List<String> callbackList = new CallbackList<String>() {
-    @Override
-    public void onAddElement(String s) { updateUI(s); }
-};
-Shell.cmd("for i in $(seq 5); do echo $i; sleep 1; done")
-    .to(callbackList)
-    .submit(result -> updateUI(result));
-```
-
-### Initialization
-
-Optionally, a similar concept to `.bashrc`, initialize shells with custom `Shell.Initializer`:
-
-```java
-public class ExampleInitializer extends Shell.Initializer {
-    @Override
-    public boolean onInit(Context context, Shell shell) {
-        InputStream bashrc = context.getResources().openRawResource(R.raw.bashrc);
-        // Here we use Shell instance APIs instead of Shell.cmd(...) static methods
-        shell.newJob()
-            .add(bashrc)                  /* Load a script */
-            .add("export ENV_VAR=VALUE")  /* Run some commands */
-            .exec();
-        return true;  // Return false to indicate initialization failed
-    }
+private void show2FAPrompt(Context context, On2FAVerifiedListener listener) {
+    // Implement the 2FA prompt here (could be SMS OTP, Google Authenticator, etc.)
+    // Example: showDialogForOTP(listener);
 }
-Shell.Builder builder = /* Create a shell builder */ ;
-builder.setInitializers(ExampleInitializer.class);
-```
 
-### Root Services
-
-If interacting with a root shell is too limited for your needs, you can also implement a root service to run complex code. A root service is similar to [Bound Services](https://developer.android.com/guide/components/bound-services) but running in a root process. `libsu` uses Android's native IPC mechanism, binder, for communication between your root service and the main application process. In addition to running Java/Kotlin code, loading native libraries with JNI is also supported (`android:extractNativeLibs=false` **is** allowed). For more details, please read the full Javadoc of `RootService` and check out the example app for more details. Add `com.github.topjohnwu.libsu:service` as a dependency to access `RootService`:
-
-```java
-public class RootConnection implements ServiceConnection { ... }
-public class ExampleService extends RootService {
-    @Override
-    public IBinder onBind(Intent intent) {
-        // return IBinder from Messenger or AIDL stub implementation
-    }
+public void requestRootAccess() {
+    Shell.getShell(shell -> {
+        Shell.Result result = Shell.cmd("echo hello").exec();
+        // Handle result
+    });
 }
-RootConnection connection = new RootConnection();
-Intent intent = new Intent(context, ExampleService.class);
-RootService.bind(intent, connection);
-```
 
-##### Debugging Root Services
 
-If the application process creating the root service has a debugger attached, the root service will automatically enable debugging mode and wait for the debugger to attach. In Android Studio, go to **"Run > Attach Debugger to Android Process"**, tick the **"Show all processes"** box, and you should be able to manually attach to the remote root process. Currently, only the **"Java only"** debugger is supported.
+2. Limit Root Command Execution:
 
-### I/O
+Rather than allowing arbitrary shell commands, restrict the commands you allow to execute. For example, limit what can be executed by creating a whitelist:
 
-Add `com.github.topjohnwu.libsu:nio` as a dependency to access remote file system APIs:
-
-```java
-// Create the file system service in the root process
-// For example, create and send the service back to the client in a RootService
-public class ExampleService extends RootService {
-    @Override
-    public IBinder onBind(Intent intent) {
-        return FileSystemManager.getService();
+public void executeRootCommand(String command) {
+    // Ensure the command is on the whitelist before execution
+    if (isValidRootCommand(command)) {
+        Shell.cmd(command).submit(result -> handleResult(result));
+    } else {
+        showError("Invalid command attempted");
     }
 }
 
-// In the client process
-IBinder binder = /* From the root service connection */;
-FileSystemManager remoteFS;
-try {
-    remoteFS = FileSystemManager.getRemote(binder);
-} catch (RemoteException e) {
-    // Handle errors
+private boolean isValidRootCommand(String command) {
+    // List of safe commands only
+    List<String> safeCommands = Arrays.asList("find /", "ls -l /", "cat /proc/cpuinfo");
+    return safeCommands.contains(command);
 }
-ExtendedFile bootBlock = remoteFS.getFile("/dev/block/by-name/boot");
-if (bootBlock.exists()) {
-    ExtendedFile bootBackup = remoteFS.getFile("/data/boot.img");
-    try (InputStream in = bootBlock.newInputStream();
-         OutputStream out = bootBackup.newOutputStream()) {
-        // Do I/O stuffs...
-    } catch (IOException e) {
-        // Handle errors
+
+
+3. Check for Root Permissions Before Using Root:
+
+Make sure the device is rooted before attempting to execute any root commands. This avoids unnecessary root permission prompts:
+
+public boolean isDeviceRooted() {
+    String path = "/system/xbin/su";
+    File suFile = new File(path);
+    return suFile.exists();
+}
+
+
+4. Enhanced Error Handling:
+
+Implement robust error handling when dealing with root permissions to avoid crashes and potential security issues:
+
+public void executeRootCommandWithErrorHandling(String command) {
+    try {
+        Shell.Result result = Shell.cmd(command).exec();
+        if (!result.isSuccess()) {
+            showError("Command execution failed with exit code: " + result.getCode());
+        }
+    } catch (Exception e) {
+        showError("An error occurred: " + e.getMessage());
     }
 }
-```
 
-## License
 
-This project is licensed under the Apache License, Version 2.0. Please refer to `LICENSE` for the full text.
+
+
+---
+
+Conclusion:
+
+While using root permissions is often necessary for certain tasks, it comes with significant security risks. Ensure that you:
+
+Use root access only when absolutely necessary.
+
+Implement additional authentication (like 2FA) before allowing root access.
+
+Regularly update libraries and dependencies.
+
+Securely handle any inputs to avoid malicious code execution.
+
+Test the app thoroughly to ensure that it doesn’t introduce vulnerabilities, especially when dealing with sensitive root access.
+
+
+By following these best practices, you can significantly improve the security and robustness of your app.
+
